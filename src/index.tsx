@@ -1,30 +1,47 @@
-import { Action, ActionPanel, confirmAlert, Form, Icon, showToast, Toast, getPreferenceValues } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  confirmAlert,
+  Icon,
+  showToast,
+  Toast,
+  getPreferenceValues,
+  List,
+  clearSearchBar,
+  closeMainWindow,
+  useNavigation,
+  Alert,
+} from "@raycast/api";
 import { exec } from "child_process";
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 
 interface Preferences {
   useSudo: boolean;
 }
 
-const actions = {
-  Finder: "Finder",
-  Dock: "Dock",
-  "SystemUIServer (e.g. Menu Bar)": "SystemUIServer",
-  Audio: "coreaudiod",
-  Bluetooth: "bluetoothd",
-  WindowServer: "-HUP WindowServer",
+type Process = {
+  process: string;
+  label: string;
+  warning?: string;
+  icon: Icon;
 };
 
-const warnings: Partial<Record<keyof typeof actions, string>> = {
-  WindowServer: "This will close all open applications and log you out.",
-};
+const commonProcesses: Process[] = [
+  { label: "Finder", process: "Finder", icon: Icon.Finder },
+  { label: "Dock", process: "Dock", icon: Icon.Desktop },
+  { label: "Audio", process: "coreaudiod", icon: Icon.Speaker },
+  { label: "Bluetooth", process: "bluetoothd", icon: Icon.Bluetooth },
+  {
+    label: "WindowServer",
+    process: "-HUP WindowServer",
+    icon: Icon.Window,
+    warning: "This will close all open applications and log you out.",
+  },
+  { label: "SystemUIServer (e.g. Menu Bar)", process: "SystemUIServer", icon: Icon.ComputerChip },
+];
 
-const dropdownItems = Object.keys(actions).map((key) => {
-  return <Form.Dropdown.Item key={key} value={key} title={key} />;
-});
-
-function getAdvancedDropdown() {
-  return new Promise<Element[]>((resolve, reject) => {
+function getAdvancedItems() {
+  return new Promise<ReactNode[]>((resolve, reject) => {
     exec("launchctl list | grep com.apple | awk '{print $3}'\n", (error, stdout) => {
       if (error) {
         console.error(`exec error: ${error}`);
@@ -34,7 +51,22 @@ function getAdvancedDropdown() {
 
       const services = stdout.split("\n").map((line) => line.trim());
 
-      const items = services.map((service) => <Form.Dropdown.Item key={service} value={service} title={service} />);
+      const items = services.map((service) => (
+        <List.Item
+          key={service}
+          title={service}
+          actions={
+            <ActionPanel>
+              <Action
+                title="Restart"
+                onAction={async () => {
+                  await performAction({ advancedMode: service });
+                }}
+              />
+            </ActionPanel>
+          }
+        />
+      ));
 
       resolve(items); // Resolve the promise with the updated items
     });
@@ -70,73 +102,84 @@ async function getExePath(exe: string) {
 }
 
 export default function Command() {
-  const [dropdown, setDropdown] = useState<Element[] | null>(null);
-  const [advancedMode, setAdvancedMode] = useState(false);
-
-  // initialise dropdown based on advanced mode
-  useEffect(() => {
-    (async () => {
-      if (!advancedMode) {
-        setDropdown(dropdownItems);
-      } else {
-        setDropdown(await getAdvancedDropdown());
-      }
-    })();
-  }, [advancedMode]);
+  const { push } = useNavigation();
 
   return (
-    <Form
-      actions={
-        <ActionPanel>
-          <Action.SubmitForm
-            title="Restart Process"
-            onSubmit={async (values) => {
-              await performAction(values);
-            }}
+    <List>
+      <List.Section title="Common">
+        {commonProcesses.map((process) => (
+          <List.Item
+            key={process.process}
+            title={process.label}
+            icon={process.icon}
+            actions={
+              <ActionPanel>
+                <Action
+                  title="Restart"
+                  onAction={async () => {
+                    await performAction({ process });
+                  }}
+                />
+              </ActionPanel>
+            }
           />
-        </ActionPanel>
-      }
-    >
-      <Form.Dropdown id="name" title="Process">
-        {dropdown}
-      </Form.Dropdown>
-      <Form.Separator />
-      <Form.Checkbox
-        label="Advanced Mode"
-        value={advancedMode}
-        id="advancedMode"
-        onChange={setAdvancedMode}
-        info="Displays a list of all currently running system daemons. Only enable if you know what you're doing."
-      />
-    </Form>
+        ))}
+      </List.Section>
+      <List.Section title="Advanced">
+        <List.Item
+          key="advanced"
+          title="Advanced Mode..."
+          icon={Icon.BulletPoints}
+          actions={
+            <ActionPanel>
+              <Action
+                title="View All Running Services"
+                onAction={async () => {
+                  push(<AdvancedList />);
+                }}
+              />
+            </ActionPanel>
+          }
+        />
+      </List.Section>
+    </List>
   );
 }
 
-async function performAction(values: { name: string; advancedMode: boolean }) {
+function AdvancedList() {
+  const [items, setItems] = useState<ReactNode[]>([]);
+
+  useEffect(() => {
+    getAdvancedItems().then(setItems);
+  }, []);
+
+  return <List isLoading={items.length === 0}>{items}</List>;
+}
+
+async function performAction(values: { process: Process } | { advancedMode: string }) {
   const sudoOption = getPreferenceValues<Preferences>().useSudo;
-  const advancedMode = values?.advancedMode,
-    name = values?.name,
-    action = advancedMode ? name : actions[name],
-    sudo = sudoOption ? "sudo" : "";
+  const sudo = sudoOption ? "sudo" : "";
+  const processName = "process" in values ? values.process.label : values.advancedMode;
   let cmd = "";
 
-  if (!action) {
+  if (!process) {
     await showToast(Toast.Style.Failure, "No process selected");
     return;
   }
 
-  await showToast(Toast.Style.Animated, `Restarting ${name}...`);
+  clearSearchBar();
+  closeMainWindow();
 
-  if (!advancedMode) {
-    if (warnings[name]) {
+  if ("process" in values) {
+    if (values.process.warning) {
       let userConfirmed = false;
       await confirmAlert({
         title: "Warning",
-        message: warnings[name],
+        message: values.process.warning,
         icon: Icon.Warning,
         primaryAction: {
           title: "Continue",
-          style: Action.Style.Destructive,
+          style: Alert.ActionStyle.Destructive,
           onAction: () => {
             userConfirmed = true;
           },
@@ -150,14 +193,14 @@ async function performAction(values: { name: string; advancedMode: boolean }) {
       await showToast(Toast.Style.Failure, "killall executable not found");
       return;
     }
-    cmd = `${sudo} ${killall} -KILL ${action}`;
+    cmd = `${sudo} ${killall} -KILL ${values.process.process}`;
   } else {
     const launchctl = await getExePath("launchctl");
     if (!launchctl) {
       await showToast(Toast.Style.Failure, "launchctl executable not found");
       return;
     }
-    cmd = `${sudo} ${launchctl} stop ${action}`;
+    cmd = `${sudo} ${launchctl} stop ${values.advancedMode}`;
   }
 
   let success = true;
@@ -186,6 +229,6 @@ async function performAction(values: { name: string; advancedMode: boolean }) {
   });
 
   if (success) {
-    await showToast(Toast.Style.Success, `${name} restarted`);
+    await showToast(Toast.Style.Success, `${processName} restarted`);
   }
 }
