@@ -1,6 +1,10 @@
-import { Action, ActionPanel, confirmAlert, Form, Icon, showToast, Toast, LocalStorage } from "@raycast/api";
+import { Action, ActionPanel, confirmAlert, Form, Icon, showToast, Toast, getPreferenceValues } from "@raycast/api";
 import { exec } from "child_process";
 import { useEffect, useState } from "react";
+
+interface Preferences {
+  useSudo: boolean;
+}
 
 const actions = {
   Finder: "Finder",
@@ -11,7 +15,7 @@ const actions = {
   WindowServer: "-HUP WindowServer",
 };
 
-const warnings = {
+const warnings: Partial<Record<keyof typeof actions, string>> = {
   WindowServer: "This will close all open applications and log you out.",
 };
 
@@ -20,7 +24,7 @@ const dropdownItems = Object.keys(actions).map((key) => {
 });
 
 function getAdvancedDropdown() {
-  return new Promise((resolve, reject) => {
+  return new Promise<Element[]>((resolve, reject) => {
     exec("launchctl list | grep com.apple | awk '{print $3}'\n", (error, stdout) => {
       if (error) {
         console.error(`exec error: ${error}`);
@@ -37,8 +41,8 @@ function getAdvancedDropdown() {
   });
 }
 
-async function getExePath(exe) {
-  let path = await new Promise((resolve) => {
+async function getExePath(exe: string) {
+  const path = await new Promise((resolve) => {
     exec(`which ${exe}`, (error, stdout) => {
       resolve(error ? null : stdout.trim());
     });
@@ -65,18 +69,9 @@ async function getExePath(exe) {
   return null;
 }
 
-async function getSudoOption() {
-  return !!((await LocalStorage.getItem("sudoOption")) ?? "");
-}
-
-async function setSudoOption(value) {
-  await LocalStorage.setItem("sudoOption", value ? "true" : "");
-}
-
 export default function Command() {
-  const [dropdown, setDropdown] = useState(null);
+  const [dropdown, setDropdown] = useState<Element[] | null>(null);
   const [advancedMode, setAdvancedMode] = useState(false);
-  const [sudo, setSudo] = useState(false);
 
   // initialise dropdown based on advanced mode
   useEffect(() => {
@@ -88,13 +83,6 @@ export default function Command() {
       }
     })();
   }, [advancedMode]);
-
-  // initialise sudo option
-  useEffect(() => {
-    (async () => {
-      setSudo(await getSudoOption());
-    })();
-  }, []);
 
   return (
     <Form
@@ -114,13 +102,6 @@ export default function Command() {
       </Form.Dropdown>
       <Form.Separator />
       <Form.Checkbox
-        label="Sudo"
-        value={sudo}
-        id="sudo"
-        onChange={setSudo}
-        info="Use sudo when running the command. This is required for some processes. See README for more info."
-      />
-      <Form.Checkbox
         label="Advanced Mode"
         value={advancedMode}
         id="advancedMode"
@@ -131,17 +112,13 @@ export default function Command() {
   );
 }
 
-async function performAction(values) {
+async function performAction(values: { name: string; advancedMode: boolean }) {
+  const sudoOption = getPreferenceValues<Preferences>().useSudo;
   const advancedMode = values?.advancedMode,
     name = values?.name,
     action = advancedMode ? name : actions[name],
-    sudoOption = values?.sudo ?? false,
     sudo = sudoOption ? "sudo" : "";
   let cmd = "";
-
-  try {
-    await setSudoOption(sudo);
-  } catch (e) {} // eslint-disable-line
 
   if (!action) {
     await showToast(Toast.Style.Failure, "No process selected");
@@ -185,7 +162,7 @@ async function performAction(values) {
 
   let success = true;
 
-  let child = exec(cmd, (error, stdout, stderr) => {
+  const child = exec(cmd, (error, stdout, stderr) => {
     if (error) {
       console.log(`exec error: ${error}`);
       showToast(Toast.Style.Failure, `Error: ${error.message}`);
