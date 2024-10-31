@@ -197,8 +197,6 @@ async function performAction(values: { process: Process } | { advancedMode: stri
     return;
   }
 
-  await saveLastUsedItems("process" in values ? values.process.process : values.advancedMode);
-
   await clearSearchBar();
   await closeMainWindow();
 
@@ -234,6 +232,8 @@ async function performAction(values: { process: Process } | { advancedMode: stri
     }
     cmd = `${sudo} ${launchctl} stop ${values.advancedMode}`;
   }
+
+  await saveLastUsedItems("process" in values ? values.process.process : values.advancedMode);
 
   let success = true;
 
