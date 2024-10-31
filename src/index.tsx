@@ -199,8 +199,8 @@ async function performAction(values: { process: Process } | { advancedMode: stri
 
   await saveLastUsedItems("process" in values ? values.process.process : values.advancedMode);
 
-  clearSearchBar();
-  closeMainWindow();
+  await clearSearchBar();
+  await closeMainWindow();
 
   if ("process" in values) {
     if (values.process.warning) {
